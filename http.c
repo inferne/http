@@ -34,6 +34,84 @@ ZEND_DECLARE_MODULE_GLOBALS(http)
 /* True global resources - no need for thread safety here */
 static int le_http;
 
+zend_class_entry http_class_ce;//define http class
+
+ZEND_DECLARE_MODULE_GLOBALS(http);//declare module globals
+
+static zend_function_entry http_functions[] = {
+    PHP_ME(http, __construct, NULL, ZEND_ACC_CTOR | ZEND_ACC_PUBLIC)
+    PHP_ME(http, __destruct, NULL, ZEND_ACC_DTOR | ZEND_ACC_PUBLIC)
+    PHP_ME(http, get, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(http, post, NULL, ZEND_ACC_PUBLIC)
+    PHP_FE_END
+}
+
+
+/**
+ *
+ */
+PHP_METHOD(http, __construct)
+{
+    if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "") == FAILURE){
+        RETURN_FALSE;
+    }
+}
+
+/**
+ *
+ */
+PHP_METHOD(http, __destruct)
+{
+
+}
+
+PHP_METHOD(http, get)
+{
+    //
+}
+
+PHP_METHOD(http, post)
+{
+    //
+}
+
+http_create_sock();
+
+http_build_header(){}
+
+http_request(char *context)
+{
+    char *host;
+    size_t host_len;
+    zend_long port = -1;
+    zend_long timeout = 1;
+
+    int persistent = 1;
+    char *persistent_id = NULL;
+    int persistent_id_len = -1;
+
+    if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s|ll", &host, &host_len, &port, &timeout) == FAILURE){
+        RETURN_FALSE;
+    }
+
+    if(timeout < 0L || timeout > INT_MAX){
+        zend_throw_exception(NULL, "Invalid timeout", 0);
+        RETURN_FALSE;
+    }
+
+    if(port == -1 && host[0] != '/' && host_len){
+        port = 80;
+    }
+
+    http_sock = http_create_sock();
+
+    if(){
+
+    }
+}
+
+http_parse(char *response){}
+
 /* {{{ PHP_INI
  */
 /* Remove comments and fill if you need to have entries in php.ini
@@ -91,6 +169,19 @@ PHP_MINIT_FUNCTION(http)
 	/* If you have INI entries, uncomment these lines
 	REGISTER_INI_ENTRIES();
 	*/
+    zend_class_entry http_ce;
+    INIT_CLASS_ENTRY(http_ce, "http", http_functions);
+
+    http_class_ce = zend_register_internal_class(&http_ce TSRMLS_CC);
+
+    //定义属性
+    zend_declare_property_long(http_class_ce, "port", strlen("port"), 80, ZEND_ACC_PUBLIC);
+    zend_declare_property_long(http_class_ce, "timeout", strlen("timeout"), 1, ZEND_ACC_PUBLIC);
+    zend_declare_property_long(http_class_ce, "length", strlen("length"), 8196, ZEND_ACC_PUBLIC);
+    zend_declare_property_string(http_class_ce, "url", strlen("url"), "", ZEND_ACC_PUBLIC);
+    zend_declare_property_string(http_class_ce, "user_agent", strlen("user_agent"), "your agent", ZEND_ACC_PUBLIC);
+    zend_declare_property_string(http_class_ce, "header", strlen("header"), "", ZEND_ACC_PUBLIC);
+
 	return SUCCESS;
 }
 /* }}} */

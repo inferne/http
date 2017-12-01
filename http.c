@@ -62,17 +62,59 @@ PHP_METHOD(http, __construct)
  */
 PHP_METHOD(http, __destruct)
 {
+    if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "") == FAILURE){
+        RETURN_FALSE;
+    }
 
 }
 
 PHP_METHOD(http, get)
 {
-    //
+    char *query, *header, *result, *context;
+    zval *params;
+    zval *url, *rv;
+    //获取参数
+    if(zend_parse_parameters(ZEND_NUM_ARGS() TSMLS_CC, "|a", &params) == FAILURE){
+        RETURN_FALSE;
+    }
+    //获取url属性
+    url = zend_read_property(http_class_ce, getThis(), "url", strlen("url"), 1, rv);
+    
+    //拼接query
+    query = http_build_query(params);
+    //拼接header
+    header = http_build_header();
+    //生成context
+    sprintf(context, "GET %s?%s HTTP/1.1\r\n%s\r\n", url, query, header);
+
+    result = http_request(context);
+    RETURN_STRING(result);
 }
 
 PHP_METHOD(http, post)
 {
-    //
+
+    char *query, *data, *header, *result, *context;
+    zval *params;
+    zval *url, *rv;
+
+    if(zend_parse_parameters(ZEND_NUM_ARGS() TSMLS_CC, "|a", &params) == FAILURE){
+        RETURN_FALSE;
+    }
+
+    url = zend_read_property(http_class_ce, getThis(), "url", strlen("url"), 1, rv);
+
+    data = http_build_query(params);
+    if(strlen(data) > 0){
+        strcat(data, "\r\n\r\n");
+    }
+
+    header = http_build_header();
+
+    sprintf(context, "POST %s HTTP/1.1\r\n%sContent-Length: %d\r\n\r\n%s", url, header, strlen(data), data);
+
+    result = http_request(context);
+    RETURN_STRING(result);
 }
 
 http_create_sock();

@@ -27,12 +27,26 @@
 #include "ext/standard/info.h"
 #include "php_http.h"
 
+#define http_sock_name "Http Socket Buffer"
+
+typedef struct {
+    php_stream *stream;
+    
+    char *host;
+    short port;
+    double timeout;
+    double read_timeout;
+
+    int persistent;
+    char *persistent_id;
+} HttpSock;
+
 /* If you declare any globals in php_http.h uncomment this:
 ZEND_DECLARE_MODULE_GLOBALS(http)
 */
 
 /* True global resources - no need for thread safety here */
-static int le_http;
+static int le_http_sock;
 
 zend_class_entry http_class_ce;//define http class
 
@@ -41,11 +55,176 @@ ZEND_DECLARE_MODULE_GLOBALS(http);//declare module globals
 static zend_function_entry http_functions[] = {
     PHP_ME(http, __construct, NULL, ZEND_ACC_CTOR | ZEND_ACC_PUBLIC)
     PHP_ME(http, __destruct, NULL, ZEND_ACC_DTOR | ZEND_ACC_PUBLIC)
+    PHP_ME(http, set, NULL, ZEND_ACC_PUBLIC)
     PHP_ME(http, get, NULL, ZEND_ACC_PUBLIC)
     PHP_ME(http, post, NULL, ZEND_ACC_PUBLIC)
     PHP_FE_END
 }
 
+char * http_build_query(zval *params)
+{
+    char *query;
+    Bucket *p, *end;
+    char *query = '', *bind = '&';
+    int query_len = 0, bind_len = 1;
+
+    if(Z_TYPE_P(params) != IS_ARRAY){
+        zend_throw_exception(NULL, "Parameter 1 expected to be Array.  Incorrect value given", 0);
+        RETURN_FALSE;
+    }
+
+    zend_array *arr = Z_ARR_P(params);
+    
+    p = arr->arData;
+    end = p + arr->nNumUsed;
+    for(; p != end; p++){
+        query_len += *(p->key)->len + Z_STR(p->val)->len + bind_len + 1;
+        query = (char *)erealloc(query_len);
+        sprintf(query, "%s%s=%s%s", query, *(p->key)->val, Z_STR(p->val)->val, bind);
+    }
+    memcpy(query, query, query_len - bind_len);
+
+    return query;
+}
+
+char * http_build_header()
+{
+    char *context = '';
+    zval *url, *rv;
+    zend_array *arr_hd = zend_read_property(http_class_ce, getThis(), 'header', strlen('header'), 1, rv);
+
+    if(arr_hd->nNumUsed > 0){
+        p = arr_hd->arData;
+        end = p + arr_hd->nNumUsed;
+        for(; p != end; p++){
+            sprintf(context, "%s\r\n", context, Z_STR(p->val)->val);
+        }
+    }
+
+    if(!zend_hash_find(arr_hd, 'Accept')) {
+        sprintf(context, "%s%s", "Accept: */*\r\n");
+    }
+    
+    $context .= "Host: ".$this->url['host']."\r\n";
+    
+    if(!zend_hash_find(arr_hd, 'User-Agent')) {
+        sprintf(context, "%s%s", "User-Agent: Http Client\r\n");
+    }
+
+    if(!zend_hash_find(arr_hd, 'Content-Type')) {
+        sprintf(context, "%s%s", "Content-Type: application/x-www-form-urlencoded\r\n");
+    }
+
+    if(!zend_hash_find(arr_hd, 'Connection')) {
+        sprintf(context, "%s%s", "Connection: Keep-Alive\r\n");
+    }
+
+    return context;
+}
+
+HttpSock * http_sock_create(char *host, short port, double timeout, int persistent)
+{
+    HttpSock *http_sock;
+
+    http_sock = emalloc(sizeof(HttpSock));
+    http_sock->stream = NULL;
+    http_sock->host = host;
+    http_sock->port = port;
+    http_sock->timeout = timeout;
+    http_sock->persistent = persistent;
+
+    return http_sock;
+}
+
+http_request(char *context)
+{
+    char *host, *name,*errstr = NULL;
+    size_t host_len, name_len;
+    short port = -1;
+    double timeout = 1;
+
+    int persistent = 1， errcode = 0;
+
+    if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s|ld", &host, &host_len, &port, &timeout) == FAILURE){
+        RETURN_FALSE;
+    }
+
+    if(timeout < 0L || timeout > INT_MAX){
+        zend_throw_exception(NULL, "Invalid timeout", 0);
+        RETURN_FALSE;
+    }
+
+    if(port == -1 && host[0] != '/' && host_len){ /* not unix socket, set to default value */
+        port = 80;
+    }
+
+    http_sock = http_sock_create(host, port, timeout, persistent);
+
+    if(port){
+        name_len = sprintf(name, "tcp://%s:%d", host, port);
+    }else{
+        name = host;
+        name_len = host_len;
+    }
+    
+    if (http_sock->persistent) {
+        if (http_sock->persistent_id) {
+            spprintf(&persistent_id, 0, "http:%s:%s", name, http_sock->persistent_id);
+        } else {
+            spprintf(&persistent_id, 0, "http:%s:%f", name, http_sock->timeout);
+        }
+    }
+
+    http_sock->stream = php_stream_xport_create(name, name_len, 0, STREAM_XPORT_CLIENT | STREAM_XPORT_CONNECT, persistent_id, NULL, NULL, &errstr, &errcode);
+    if(!http_sock->stream){
+        http_free_socket(http_sock);
+        RETURN_FALSE;
+    }
+
+    efree(name);
+
+    if(errstr){
+        zend_throw_exception(NULL, errstr, 0);
+        efree(errstr);
+    }
+
+    //zend_list_insert(http_sock, le_http_sock TSRMLS_CC);
+
+    php_stream_write_string(http_sock->stream, context);
+
+    char *response = NULL;
+    char buf[1024] = '';
+    int res_size = 0;
+
+    while(!php_stream_eof(http_sock->stream)){
+        php_stream_read(http_sock->stream, buf, 1024);
+        if(buf){
+            res_size += 1024;
+            erealloc(response, res_size);
+            strcat(response, buf);
+        }
+        if(strstr(buf, '0\r\n\r\n')){
+            break;
+        }
+    }
+
+    return http_parse(response);
+}
+
+http_parse(char *response)
+{
+    char *http_header = NULL;
+    char *http_data;
+    char *data;
+
+    http_header = strtok(response, "\r\n\r\n");
+    http_data = strtok(response, "\r\n\r\n");
+
+    while(strtok(http_data, "\r\n") > 0){
+        strcat(data, strtok(http_data, "\r\n"));
+    }
+    return data;
+}
 
 /**
  *
@@ -79,7 +258,7 @@ PHP_METHOD(http, get)
     }
     //获取url属性
     url = zend_read_property(http_class_ce, getThis(), "url", strlen("url"), 1, rv);
-    
+
     //拼接query
     query = http_build_query(params);
     //拼接header
@@ -88,13 +267,14 @@ PHP_METHOD(http, get)
     sprintf(context, "GET %s?%s HTTP/1.1\r\n%s\r\n", url, query, header);
 
     result = http_request(context);
+
     RETURN_STRING(result);
 }
 
 PHP_METHOD(http, post)
 {
 
-    char *query, *data, *header, *result, *context;
+    char *query, *data = NULL, *header = NULL, *result = NULL, *context = NULL;
     zval *params;
     zval *url, *rv;
 
@@ -114,45 +294,9 @@ PHP_METHOD(http, post)
     sprintf(context, "POST %s HTTP/1.1\r\n%sContent-Length: %d\r\n\r\n%s", url, header, strlen(data), data);
 
     result = http_request(context);
+
     RETURN_STRING(result);
 }
-
-http_create_sock();
-
-http_build_header(){}
-
-http_request(char *context)
-{
-    char *host;
-    size_t host_len;
-    zend_long port = -1;
-    zend_long timeout = 1;
-
-    int persistent = 1;
-    char *persistent_id = NULL;
-    int persistent_id_len = -1;
-
-    if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s|ll", &host, &host_len, &port, &timeout) == FAILURE){
-        RETURN_FALSE;
-    }
-
-    if(timeout < 0L || timeout > INT_MAX){
-        zend_throw_exception(NULL, "Invalid timeout", 0);
-        RETURN_FALSE;
-    }
-
-    if(port == -1 && host[0] != '/' && host_len){
-        port = 80;
-    }
-
-    http_sock = http_create_sock();
-
-    if(){
-
-    }
-}
-
-http_parse(char *response){}
 
 /* {{{ PHP_INI
  */
@@ -185,6 +329,24 @@ PHP_FUNCTION(confirm_http_compiled)
 
 	RETURN_STR(strg);
 }
+
+void http_sock_disconnect(HttpSork *http_sock)
+{
+    //
+}
+
+void http_free_socket(HttpSock *http_sock)
+{
+    //
+}
+
+static void http_sock_dtor(zend_resource *rsrc)
+{
+    HttpSock *http_sock = (HttpSock *) rsrc->ptr;
+    http_sock_disconnect(http_sock);
+    http_free_socket(http_sock);
+}
+
 /* }}} */
 /* The previous line is meant for vim and emacs, so it can correctly fold and
    unfold functions in source code. See the corresponding marks just before
@@ -222,7 +384,13 @@ PHP_MINIT_FUNCTION(http)
     zend_declare_property_long(http_class_ce, "length", strlen("length"), 8196, ZEND_ACC_PUBLIC);
     zend_declare_property_string(http_class_ce, "url", strlen("url"), "", ZEND_ACC_PUBLIC);
     zend_declare_property_string(http_class_ce, "user_agent", strlen("user_agent"), "your agent", ZEND_ACC_PUBLIC);
-    zend_declare_property_string(http_class_ce, "header", strlen("header"), "", ZEND_ACC_PUBLIC);
+    zend_declare_property_array(http_class_ce, "header", strlen("header"), "", ZEND_ACC_PUBLIC);
+    
+    le_http_sock = zend_register_list_destructors_ex(
+        http_sock_dtor,
+        NULL,
+        http_sock_name, module_number
+    );
 
 	return SUCCESS;
 }

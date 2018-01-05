@@ -13,9 +13,9 @@ dnl [  --with-http             Include http support])
 
 dnl Otherwise use enable:
 
-dnl PHP_ARG_ENABLE(http, whether to enable http support,
+PHP_ARG_ENABLE(http, whether to enable http support,
 dnl Make sure that the comment is aligned:
-dnl [  --enable-http           Enable http support])
+[  --enable-http           Enable http support])
 
 if test "$PHP_HTTP" != "no"; then
   dnl Write more examples of tests here...

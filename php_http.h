@@ -38,6 +38,12 @@ extern zend_module_entry http_module_entry;
 #include "TSRM.h"
 #endif
 
+PHP_METHOD(http, __construct);
+PHP_METHOD(http, __destruct);
+PHP_METHOD(http, set);
+PHP_METHOD(http, get);
+PHP_METHOD(http, post);
+
 /*
   	Declare any global variables you may need between the BEGIN
 	and END macros here:
@@ -47,6 +53,10 @@ ZEND_BEGIN_MODULE_GLOBALS(http)
 	char *global_string;
 ZEND_END_MODULE_GLOBALS(http)
 */
+ZEND_BEGIN_MODULE_GLOBALS(http)
+  zend_long  global_value;
+  char *global_string;
+ZEND_END_MODULE_GLOBALS(http)
 
 /* Always refer to the globals in your function as HTTP_G(variable).
    You are encouraged to rename these macros something shorter, see

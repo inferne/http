@@ -62,11 +62,79 @@ static zend_function_entry http_functions[] = {
     {NULL, NULL, NULL}
 };
 
+void exchange(char *a, char *b){
+    *a = *a ^ *b;
+    *b = *a ^ *b;
+    *a = *a ^ *b;
+}
+
+void itoa(zend_long n, char *str)
+{
+    int i,j;
+    zend_long sign;
+    if((sign = n) < 0){//记录正负号
+        n = -n;
+    }
+
+    i = 0;
+    char *p = str;
+    do{
+        *p = n%10 + '0';
+        p++;
+        i++;
+    } while( (n = n/10) > 0 );
+
+    if(sign < 0){
+        *p = '-';
+        p++;
+        i++;
+    }
+    *p = '\0';
+    for(j = 0; j < i/2; j++){
+        exchange(str+j, str+i-j-1);
+    }
+}
+
+zend_string * zval2string(zval *z)
+{
+    zend_string *res = (zend_string *)emalloc(sizeof(zend_string));
+    char *p = res->val;
+    switch(Z_TYPE_P(z)){
+        case IS_NULL:
+            p = "null"; 
+            res->len = strlen("null");
+            break;
+        case IS_FALSE:
+            p = "false"; 
+            res->len = strlen("false");
+            break;
+        case IS_TRUE:
+            p = "true"; 
+            res->len = strlen("true");
+            break;
+        case IS_LONG:
+            itoa(z->value.lval, res->val); 
+            res->len = strlen(res->val);
+            break;
+        case IS_DOUBLE:
+            itoa(z->value.lval, res->val); 
+            res->len = strlen(res->val);
+            break;
+        case IS_STRING:
+            res = z->value.str;
+            break;
+        default :
+            p = "array ? object ? resource or reference ?";
+            res->len = 64;
+            break;
+    }
+    return res;
+}
+
 char * http_build_query(zval *params)
 {
-    Bucket *p, *end;
     char *query = NULL, *bind = "&";
-    int query_len = 0, bind_len = 1;
+    int query_len = 0, bind_len = 1, size = 1024;
 
     if(Z_TYPE_P(params) != IS_ARRAY){
         zend_throw_exception(NULL, "Parameter 1 expected to be Array.  Incorrect value given", 0);
@@ -75,53 +143,60 @@ char * http_build_query(zval *params)
 
     zend_array *arr = Z_ARR_P(params);
 
-    p = arr->arData;
-    end = p + arr->nNumUsed;
+    Bucket *p = arr->arData;
+    Bucket *end = p + arr->nNumUsed;
+    query = (char *)ecalloc(size, sizeof(char));
     for(; p != end; p++){
-        query_len += p->key->len + Z_STR(p->val)->len + bind_len + 1;
-        query = (char *)erealloc(query, query_len);
-        sprintf(query, "%s%s=%s%s", query, p->key->val, Z_STR(p->val)->val, bind);
+        query_len += p->key->len + zval2string(&p->val)->len + bind_len + 1;
+        if(query_len > size){
+            size *= 2;
+            query = (char *)erealloc(query, size);
+        }
+        if(query){
+            strcat(query, bind);
+        }
+        strcat(query, p->key->val);
+        strcat(query, "=");
+        strcat(query, zval2string(&p->val)->val);
     }
-    memcpy(query, query, query_len - bind_len);
-
+    //memcpy(query, query, query_len - bind_len);
+    printf("%s\n", query);
     return query;
+}
+
+void array_exists(char *context, zend_array *za, char *str, size_t len, char *def)
+{
+    if(!za || zend_hash_str_exists(za, str, len)){
+        strcat(context, def);
+    }
 }
 
 char * http_build_header(INTERNAL_FUNCTION_PARAMETERS)
 {
     Bucket *p, *end;
-    char *context = "";
     zval *url, *rv;
+    
+    int size = 1024;
+    char *context = (char *)emalloc(sizeof(char)*size);
+    
     zval *header = zend_read_property(http_class_ce, getThis(), "header", strlen("header"), 1, rv);
 
     zend_array *arr_hd = (header->value).arr;
 
-    if(arr_hd->nNumUsed > 0){
+    if(arr_hd && arr_hd->nNumUsed > 0){
         p = arr_hd->arData;
         end = p + arr_hd->nNumUsed;
         for(; p != end; p++){
-            sprintf(context, "%s%s\r\n", context, Z_STR(p->val)->val);
+            strcat(context, Z_STR(p->val)->val);
+            strcat(context, "\r\n");
         }
     }
 
-    if(!zend_hash_str_exists(arr_hd, "Accept", strlen("Accept"))) {
-        sprintf(context, "%s%s", context, "Accept: */*\r\n");
-    }
-
-    //context .= "Host: ".$this->url["host"]."\r\n";
-    
-    if(!zend_hash_str_exists(arr_hd, "User-Agent", strlen("User-Agent"))) {
-        sprintf(context, "%s%s", context, "User-Agent: Http Client\r\n");
-    }
-
-    if(!zend_hash_str_exists(arr_hd, "Content-Type", strlen("Content-Type"))) {
-        sprintf(context, "%s%s", context, "Content-Type: application/x-www-form-urlencoded\r\n");
-    }
-
-    if(!zend_hash_str_exists(arr_hd, "Connection", strlen("Connection"))) {
-        sprintf(context, "%s%s", context, "Connection: Keep-Alive\r\n");
-    }
-
+    array_exists(context, arr_hd, "Accept",       strlen("Accept"),       "Accept: */*\r\n");
+    array_exists(context, arr_hd, "User-Agent",   strlen("User-Agent"),   "User-Agent: Http Client\r\n");
+    array_exists(context, arr_hd, "Content-Type", strlen("Content-Type"), "Content-Type: application/x-www-form-urlencoded\r\n");
+    array_exists(context, arr_hd, "Connection",   strlen("Connection"),   "Connection: Keep-Alive\r\n");
+    printf("%s\n", context);
     return context;
 }
 
@@ -141,38 +216,163 @@ HttpSock * http_sock_create(char *host, short port, double timeout, int persiste
 
 void http_sock_disconnect(HttpSock *http_sock)
 {
-    //
+    if(!http_sock->persistent){
+        php_stream_close(http_sock->stream);
+    }
+
+    http_sock->stream = NULL;
 }
 
 void http_free_socket(HttpSock *http_sock)
 {
-    //
+    efree(http_sock);
+}
+
+int strmcat(char *dest, int dest_len, char *src, int n, size_t *max_len)
+{
+    if(dest_len + n < *max_len){//判断是否需要扩容
+        *max_len = *max_len*2;
+        char *buf = (char *)ecalloc(*max_len, 1);
+        memcpy(buf, dest, dest_len);
+        efree(dest);
+        dest = buf;
+    }
+    strncat(dest, src, n);
+    dest_len += n;
+    return dest_len;
+}
+
+int * next_prifix(char *p)
+{
+    size_t m = strlen(p);
+    int *next = (int *)ecalloc(m, sizeof(int));
+
+    int k = 0, i = 0;
+    next[0] = 0;
+    for(i = 0; i < m; i++){
+        while(k > 0 && p[i] != p[k+1]){
+            k = next[k];
+        }
+        if(p[i] == p[k+1]){
+            k = k + 1;
+        }
+        next[i] = k;
+    }
+    return next;
+}
+
+zend_array * explode(char *delim, char *str)
+{
+    zend_array *za;//分分割结果数组
+    zend_ulong j = 0;
+    zval *pData;
+    
+    //临时字符串
+    size_t *buf_max_size;
+    *buf_max_size = 1024;
+    zend_string *buf = zend_string_alloc(*buf_max_size, 0);
+    
+    int str_len = strlen(str);
+
+    int m = strlen(delim);
+    int *next = next_prifix(delim);
+    int i = 0, k = 0;
+    for(i = 0; i < str_len; i++){
+        while(k > 0 && str[i] != delim[k+1]){
+            buf->len = strmcat(buf->val, buf->len, delim, k - next[k], buf_max_size);
+            k = next[k];
+        }
+        if(str[i] == delim[k+1]){
+            k = k +1;
+        }else{
+            //buf->len = strmcat(buf->val, buf->len, str[i], 1, buf_max_size);
+        }
+        if(k == m){
+            //HashTable *ht, zend_ulong h, zval *pData
+            pData = (zval *)emalloc(sizeof(zval));
+            Z_STR_P(pData) = buf;
+            zend_hash_index_add(za, j, pData);
+            j++;
+            
+            *buf_max_size = 1024;
+            buf = zend_string_alloc(*buf_max_size, 0);
+            printf("yes\n");
+        }
+        k = next[k];
+    }
+    return za;
 }
 
 char * http_parse(char *response)
 {
-    char *http_header = NULL;
-    char *http_data;
-    char *data;
+    printf("%s\n", response);
+    zend_array *arr_rps = explode(response, "\r\n\r\n");
+    Bucket *rps = arr_rps->arData;
 
-    http_header = strtok(response, "\r\n\r\n");
-    http_data = strtok(response, "\r\n\r\n");
+    zend_string *http_header = Z_STR(rps->val);
+    printf("%s\n", http_header->val);
 
-    while(strtok(http_data, "\r\n") > 0){
-        strcat(data, strtok(http_data, "\r\n"));
+    rps++;
+    zend_string *http_data = Z_STR(rps->val);
+    printf("%s\n", http_data->val);
+
+    zend_array *arr_data = explode(http_data->val, "\r\n");
+    Bucket *p = arr_data->arData;
+    Bucket *end = p + arr_data->nNumUsed;
+
+    char *ret;
+    int ret_len = 0;
+    size_t *max_len;
+    *max_len = 1024;
+    for(; p != end; p++){
+        ret_len = strmcat(ret, ret_len, Z_STRVAL(p->val), Z_STRLEN(p->val), max_len);
     }
-    return data;
+    return ret;
 }
 
-char * http_request(INTERNAL_FUNCTION_PARAMETERS, char *context)
+int http_sock_connect(HttpSock *http_sock)
 {
-    char *name = NULL;
-    size_t name_len;
-    double timeout = 1;
+    char *host = NULL;
+    size_t host_len;
 
     zend_string *errstr;
+    int errcode = 0;
     char *persistent_id;
-    int persistent = 1, errcode = 0;
+
+    host = (char *)emalloc(strlen(http_sock->host) + 16);
+    host_len = sprintf(host, "tcp://%s:%d", http_sock->host, http_sock->port);
+    
+    if (http_sock->persistent) {
+        persistent_id = (char *)emalloc(strlen(host) + 16);
+        if (http_sock->persistent_id) {
+            sprintf(persistent_id, "http:%s:%s", host, http_sock->persistent_id);
+        } else {
+            sprintf(persistent_id, "http:%s:%f", host, http_sock->timeout);
+        }
+    }
+
+    http_sock->stream = php_stream_xport_create(host, host_len, 0, STREAM_XPORT_CLIENT | STREAM_XPORT_CONNECT, 
+        persistent_id, NULL, NULL, &errstr, &errcode);
+    if(!http_sock->stream){
+        http_free_socket(http_sock);
+        zend_throw_exception(NULL, errstr, 0);
+        efree(errstr);
+        return 0;
+    }
+
+    efree(host);
+
+    if(persistent_id){
+        efree(persistent_id);    
+    }
+
+    return 1;
+}
+
+int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char *response)
+{
+    double timeout = 1;
+    int persistent = 1;
 
     zval *url, *rv;
     php_url *phpurl;
@@ -186,51 +386,54 @@ char * http_request(INTERNAL_FUNCTION_PARAMETERS, char *context)
 
     HttpSock *http_sock = http_sock_create(phpurl->host, phpurl->port, timeout, persistent);
 
-    name_len = sprintf(name, "tcp://%s:%d", phpurl->host, phpurl->port);
+    if(!http_sock_connect(http_sock)){
+        zend_throw_exception(NULL, "http connect error", 0);
+        return 0;
+    }
     
-    if (http_sock->persistent) {
-        if (http_sock->persistent_id) {
-            sprintf(persistent_id, "http:%s:%s", name, http_sock->persistent_id);
-        } else {
-            sprintf(persistent_id, "http:%s:%f", name, http_sock->timeout);
-        }
-    }
-
-    http_sock->stream = php_stream_xport_create(name, name_len, 0, STREAM_XPORT_CLIENT | STREAM_XPORT_CONNECT, 
-        persistent_id, NULL, NULL, &errstr, &errcode);
-    if(!http_sock->stream){
-        http_free_socket(http_sock);
-        return ;
-    }
-
-    efree(name);
-
-    if(errstr){
-        zend_throw_exception(NULL, errstr, 0);
-        efree(errstr);
-    }
-
     //zend_list_insert(http_sock, le_http_sock TSRMLS_CC);
 
-    php_stream_write_string(http_sock->stream, context);
+    if(php_stream_write_string(http_sock->stream, context)){
+        efree(context);
+        printf("php stream write success!\n");
+    }
 
-    char *response = NULL;
-    char buf[1024] = "";
-    int res_size = 0;
+    int buf_size = 1024;
+    char *data = (char *)ecalloc(buf_size, sizeof(char));
+    char *buf = (char *)ecalloc(buf_size, sizeof(char));
+    int data_size = 0;
+    int chunked = 0;
 
     while(!php_stream_eof(http_sock->stream)){
-        php_stream_read(http_sock->stream, buf, 1024);
-        if(buf){
-            res_size += 1024;
-            erealloc(response, res_size);
-            strcat(response, buf);
+        if(php_stream_read(http_sock->stream, buf, buf_size) <= 0){
+            /* Error or EOF */
+            zend_throw_exception(NULL, "socket error on read socket", 0);
         }
-        if(strstr(buf, "0\r\n\r\n")){
-            break;
+        if(chunked == 0 && strstr(buf, "Transfer-Encoding: chunked")){
+            chunked = 1;
+        }else{
+            chunked = -1;
+        }
+        if(buf){
+            strcat(data, buf);
+            data_size += buf_size;
+            //erealloc(data, data_size);
+            //strcat(data, buf);
+        }
+        if(chunked == 1){
+            if(strstr(buf, "0\r\n\r\n")){
+                break;
+            }
+        }else{
+            if(strlen(buf) < buf_size){
+                break;
+            }
         }
     }
 
-    return http_parse(response);
+    response = http_parse(data);
+    printf("%s\n", response);
+    return 1;
 }
 
 /**
@@ -243,7 +446,7 @@ PHP_METHOD(http, __construct)
     if(zend_parse_parameters(ZEND_NUM_ARGS(), "s", &url, &url_len) == FAILURE){
         RETURN_FALSE;
     }
-
+    printf("url:%s\n", url);
     if(url_len == 0){
         zend_throw_exception(NULL, "invalid url", 0);
     }
@@ -281,6 +484,13 @@ PHP_METHOD(http, get)
     if(zend_parse_parameters(ZEND_NUM_ARGS(), "|a", &params) == FAILURE){
         RETURN_FALSE;
     }
+    zend_array *parr = Z_ARR_P(params);
+    Bucket *p = parr->arData;
+    Bucket *end = p + parr->nNumUsed;
+    for(; p != end; p++){
+        printf("key=%s,value=%ld\n", p->key->val, p->val.value.lval);
+    }
+
     //获取url属性
     url = zend_read_property(http_class_ce, getThis(), "url", strlen("url"), 1, rv);
 
@@ -289,11 +499,15 @@ PHP_METHOD(http, get)
     //拼接header
     header = http_build_header(INTERNAL_FUNCTION_PARAM_PASSTHRU);
     //生成context
-    sprintf(context, "GET %s?%s HTTP/1.1\r\n%s\r\n", url, query, header);
+    context = (char *)emalloc(1024);
+    sprintf(context, "GET %s?%s HTTP/1.1\r\n%s\r\n", Z_STRVAL_P(url), query, header);
+    printf("%s\n", context);
+    char *response;
+    if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, response)){
 
-    result = http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context);
+    }
 
-    RETURN_STRING(result);
+    RETURN_STRING(response);
 }
 
 PHP_METHOD(http, post)
@@ -318,7 +532,10 @@ PHP_METHOD(http, post)
 
     sprintf(context, "POST %s HTTP/1.1\r\n%sContent-Length: %d\r\n\r\n%s", url, header, strlen(data), data);
 
-    result = http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context);
+    char *response;
+    if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, response)){
+
+    }
 
     RETURN_STRING(result);
 }
@@ -357,7 +574,7 @@ PHP_FUNCTION(confirm_http_compiled)
 
 static void http_sock_dtor(zend_resource *rsrc)
 {
-    HttpSock *http_sock = (HttpSock *) rsrc->ptr;
+    HttpSock *http_sock = (HttpSock *)rsrc->ptr;
     http_sock_disconnect(http_sock);
     http_free_socket(http_sock);
 }

@@ -247,7 +247,7 @@ int * next_prifix(char *p)
     size_t m = strlen(p);
     int *next = (int *)ecalloc(m, sizeof(int));
 
-    int k = 0, i = 0;
+    int i, k = 0;
     next[0] = 0;
     for(i = 0; i < m; i++){
         while(k > 0 && p[i] != p[k+1]){
@@ -261,15 +261,20 @@ int * next_prifix(char *p)
     return next;
 }
 
-zend_array * explode(char *delim, char *str)
+/**
+ *
+ * 字符串分隔，kmp算法改编
+ */
+zend_array * explode(char *str, char *delim)
 {
     zend_array *za;//分分割结果数组
     zend_ulong j = 0;
     zval *pData;
     
     //临时字符串
+    size_t max_size = 1024;
     size_t *buf_max_size;
-    *buf_max_size = 1024;
+    buf_max_size = &max_size;
     zend_string *buf = zend_string_alloc(*buf_max_size, 0);
     
     int str_len = strlen(str);
@@ -277,6 +282,7 @@ zend_array * explode(char *delim, char *str)
     int m = strlen(delim);
     int *next = next_prifix(delim);
     int i = 0, k = 0;
+    char c[2] = "A";
     for(i = 0; i < str_len; i++){
         while(k > 0 && str[i] != delim[k+1]){
             buf->len = strmcat(buf->val, buf->len, delim, k - next[k], buf_max_size);
@@ -285,10 +291,10 @@ zend_array * explode(char *delim, char *str)
         if(str[i] == delim[k+1]){
             k = k +1;
         }else{
-            //buf->len = strmcat(buf->val, buf->len, str[i], 1, buf_max_size);
+            c[0] = str[i];//字符转变为1长度的字符串
+            buf->len = strmcat(buf->val, buf->len, c, 1, buf_max_size);
         }
         if(k == m){
-            //HashTable *ht, zend_ulong h, zval *pData
             pData = (zval *)emalloc(sizeof(zval));
             Z_STR_P(pData) = buf;
             zend_hash_index_add(za, j, pData);

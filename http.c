@@ -166,7 +166,7 @@ char * http_build_query(zval *params)
 
 void array_exists(char *context, zend_array *za, char *str, size_t len, char *def)
 {
-    if(!za || zend_hash_str_exists(za, str, len)){
+    if(za == NULL || za->nNumUsed == 0 || !zend_hash_str_exists(za, str, len)){
         strcat(context, def);
     }
 }
@@ -249,11 +249,11 @@ int * next_prifix(char *p)
 
     int i, k = 0;
     next[0] = 0;
-    for(i = 0; i < m; i++){
-        while(k > 0 && p[i] != p[k+1]){
-            k = next[k];
+    for(i = 1; i < m; i++){
+        while(k > 0 && p[i] != p[k]){
+            k = next[k-1];
         }
-        if(p[i] == p[k+1]){
+        if(p[i] == p[k]){
             k = k + 1;
         }
         next[i] = k;
@@ -265,73 +265,80 @@ int * next_prifix(char *p)
  *
  * 字符串分隔，kmp算法改编
  */
-zend_array * explode(char *str, char *delim)
+zend_array * explode(char *str, char *d)
 {
-    zend_array *za;//分分割结果数组
+    zend_array *za = (zend_array *)emalloc(sizeof(zend_array));//分割结果数组
+    zend_hash_init(za, 8, NULL, ZVAL_PTR_DTOR, 0);
     zend_ulong j = 0;
     zval *pData;
     
     //临时字符串
     size_t max_size = 1024;
-    size_t *buf_max_size;
-    buf_max_size = &max_size;
-    zend_string *buf = zend_string_alloc(*buf_max_size, 0);
+    // size_t *buf_max_size;
+    // buf_max_size = &max_size;
+    zend_string *buf = zend_string_alloc(max_size, 0);
+    //buf->len = 0;
     
     int str_len = strlen(str);
 
-    int m = strlen(delim);
-    int *next = next_prifix(delim);
+    int m = strlen(d);
+    int *next = next_prifix(d);
     int i = 0, k = 0;
     char c[2] = "A";
+    printf("\n------------------------------------------------------------\n");
     for(i = 0; i < str_len; i++){
-        while(k > 0 && str[i] != delim[k+1]){
-            buf->len = strmcat(buf->val, buf->len, delim, k - next[k], buf_max_size);
-            k = next[k];
+        while(k > 0 && str[i] != d[k]){
+            //buf->len = strmcat(buf->val, buf->len, d, k - next[k-1], &max_size);
+            strncat(buf->val, d, k - next[k-1]);
+            k = next[k-1];
         }
-        if(str[i] == delim[k+1]){
-            k = k +1;
+        if(str[i] == d[k]){
+            k = k + 1;
         }else{
             c[0] = str[i];//字符转变为1长度的字符串
-            buf->len = strmcat(buf->val, buf->len, c, 1, buf_max_size);
+            //buf->len = strmcat(buf->val, buf->len, c, 1, &max_size);
+            strncat(buf->val, c, 1);
         }
-        if(k == m){
+        if(k == m || i == str_len-1){
+            printf("\n++++++++++++++++++++++++++++++++++++++++++++++++++\n%s\n", buf->val);
             pData = (zval *)emalloc(sizeof(zval));
             Z_STR_P(pData) = buf;
             zend_hash_index_add(za, j, pData);
             j++;
             
-            *buf_max_size = 1024;
-            buf = zend_string_alloc(*buf_max_size, 0);
-            printf("yes\n");
+            max_size = 1024;
+            buf = zend_string_alloc(max_size, 0);
+            // printf("\n");
+            k = 0;//look for the next match
         }
-        k = next[k];
     }
+    printf("++++++++++++++++++++++++++++++++++++++++++++++++++\n");
     return za;
 }
 
 char * http_parse(char *response)
 {
-    printf("%s\n", response);
+    printf("\n------------------------------------------------------------\n%s\n", response);
     zend_array *arr_rps = explode(response, "\r\n\r\n");
     Bucket *rps = arr_rps->arData;
 
     zend_string *http_header = Z_STR(rps->val);
-    printf("%s\n", http_header->val);
+    //printf("%s\n", http_header->val);
 
     rps++;
     zend_string *http_data = Z_STR(rps->val);
-    printf("%s\n", http_data->val);
+    //printf("%s\n", http_data->val);
 
     zend_array *arr_data = explode(http_data->val, "\r\n");
     Bucket *p = arr_data->arData;
     Bucket *end = p + arr_data->nNumUsed;
 
-    char *ret;
+    size_t max_len = 1024;
+    char *ret = (char *)emalloc(sizeof(char)*max_len);
     int ret_len = 0;
-    size_t *max_len;
-    *max_len = 1024;
     for(; p != end; p++){
-        ret_len = strmcat(ret, ret_len, Z_STRVAL(p->val), Z_STRLEN(p->val), max_len);
+        //ret_len = strmcat(ret, ret_len, Z_STRVAL(p->val), Z_STRLEN(p->val), &max_len);
+        strncat(ret, Z_STRVAL(p->val), Z_STRLEN(p->val));
     }
     return ret;
 }
@@ -396,7 +403,8 @@ int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char *response)
         zend_throw_exception(NULL, "http connect error", 0);
         return 0;
     }
-    
+    efree(phpurl->query);
+    efree(phpurl);
     //zend_list_insert(http_sock, le_http_sock TSRMLS_CC);
 
     if(php_stream_write_string(http_sock->stream, context)){
@@ -483,30 +491,26 @@ PHP_METHOD(http, set){
 
 PHP_METHOD(http, get)
 {
-    char *query, *header, *result, *context;
+    char *query = "", *header, *result, *context;
     zval *params;
     zval *url, *rv;
     //获取参数
     if(zend_parse_parameters(ZEND_NUM_ARGS(), "|a", &params) == FAILURE){
         RETURN_FALSE;
     }
-    zend_array *parr = Z_ARR_P(params);
-    Bucket *p = parr->arData;
-    Bucket *end = p + parr->nNumUsed;
-    for(; p != end; p++){
-        printf("key=%s,value=%ld\n", p->key->val, p->val.value.lval);
-    }
-
+    
     //获取url属性
     url = zend_read_property(http_class_ce, getThis(), "url", strlen("url"), 1, rv);
 
     //拼接query
-    query = http_build_query(params);
+    if(Z_TYPE_P(params) == IS_ARRAY){
+        query = http_build_query(params);
+    }
     //拼接header
     header = http_build_header(INTERNAL_FUNCTION_PARAM_PASSTHRU);
     //生成context
     context = (char *)emalloc(1024);
-    sprintf(context, "GET %s?%s HTTP/1.1\r\n%s\r\n", Z_STRVAL_P(url), query, header);
+    sprintf(context, "GET %s%s HTTP/1.1\r\n%s\r\n", Z_STRVAL_P(url), query, header);
     printf("%s\n", context);
     char *response;
     if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, response)){
@@ -529,7 +533,10 @@ PHP_METHOD(http, post)
 
     url = zend_read_property(http_class_ce, getThis(), "url", strlen("url"), 1, rv);
 
-    data = http_build_query(params);
+    //data = http_build_query(params);
+    if(Z_TYPE_P(params) == IS_ARRAY){
+        data = http_build_query(params);
+    }
     if(strlen(data) > 0){
         strcat(data, "\r\n\r\n");
     }
@@ -543,7 +550,7 @@ PHP_METHOD(http, post)
 
     }
 
-    RETURN_STRING(result);
+    RETURN_STRING(response);
 }
 
 /* {{{ PHP_INI

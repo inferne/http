@@ -160,7 +160,7 @@ char * http_build_query(zval *params)
         strcat(query, zval2string(&p->val)->val);
     }
     //memcpy(query, query, query_len - bind_len);
-    printf("%s\n", query);
+    //printf("%s\n", query);
     return query;
 }
 
@@ -196,7 +196,7 @@ char * http_build_header(INTERNAL_FUNCTION_PARAMETERS)
     array_exists(context, arr_hd, "User-Agent",   strlen("User-Agent"),   "User-Agent: Http Client\r\n");
     array_exists(context, arr_hd, "Content-Type", strlen("Content-Type"), "Content-Type: application/x-www-form-urlencoded\r\n");
     array_exists(context, arr_hd, "Connection",   strlen("Connection"),   "Connection: Keep-Alive\r\n");
-    printf("%s\n", context);
+    //printf("%s\n", context);
     return context;
 }
 
@@ -285,7 +285,7 @@ zend_array * explode(char *str, char *d)
     int *next = next_prifix(d);
     int i = 0, k = 0;
     char c[2] = "A";
-    printf("\n------------------------------------------------------------\n");
+    //printf("\n------------------------------------------------------------\n");
     for(i = 0; i < str_len; i++){
         while(k > 0 && str[i] != d[k]){
             //buf->len = strmcat(buf->val, buf->len, d, k - next[k-1], &max_size);
@@ -300,7 +300,7 @@ zend_array * explode(char *str, char *d)
             strncat(buf->val, c, 1);
         }
         if(k == m || i == str_len-1){
-            printf("\n++++++++++++++++++++++++++++++++++++++++++++++++++\n%s\n", buf->val);
+            //printf("\n++++++++++++++++++++++++++++++++++++++++++++++++++\n%s\n", buf->val);
             pData = (zval *)emalloc(sizeof(zval));
             Z_STR_P(pData) = buf;
             zend_hash_index_add(za, j, pData);
@@ -312,13 +312,14 @@ zend_array * explode(char *str, char *d)
             k = 0;//look for the next match
         }
     }
-    printf("++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+    efree(buf);
+    //printf("++++++++++++++++++++++++++++++++++++++++++++++++++\n");
     return za;
 }
 
 char * http_parse(char *response)
 {
-    printf("\n------------------------------------------------------------\n%s\n", response);
+    //printf("\n------------------------------------------------------------\n%s\n", response);
     zend_array *arr_rps = explode(response, "\r\n\r\n");
     Bucket *rps = arr_rps->arData;
 
@@ -340,6 +341,8 @@ char * http_parse(char *response)
         //ret_len = strmcat(ret, ret_len, Z_STRVAL(p->val), Z_STRLEN(p->val), &max_len);
         strncat(ret, Z_STRVAL(p->val), Z_STRLEN(p->val));
     }
+    efree(arr_rps);
+    efree(arr_data);
     return ret;
 }
 
@@ -382,7 +385,7 @@ int http_sock_connect(HttpSock *http_sock)
     return 1;
 }
 
-int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char *response)
+int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char **response)
 {
     double timeout = 1;
     int persistent = 1;
@@ -409,7 +412,7 @@ int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char *response)
 
     if(php_stream_write_string(http_sock->stream, context)){
         efree(context);
-        printf("php stream write success!\n");
+        //printf("php stream write success!\n");
     }
 
     int buf_size = 1024;
@@ -445,8 +448,10 @@ int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char *response)
         }
     }
 
-    response = http_parse(data);
-    printf("%s\n", response);
+    *response = http_parse(data);
+    efree(data);
+    efree(buf);
+    //printf("1 %s %p\n", *response, *response);
     return 1;
 }
 
@@ -460,7 +465,7 @@ PHP_METHOD(http, __construct)
     if(zend_parse_parameters(ZEND_NUM_ARGS(), "s", &url, &url_len) == FAILURE){
         RETURN_FALSE;
     }
-    printf("url:%s\n", url);
+    //printf("url:%s\n", url);
     if(url_len == 0){
         zend_throw_exception(NULL, "invalid url", 0);
     }
@@ -511,12 +516,20 @@ PHP_METHOD(http, get)
     //生成context
     context = (char *)emalloc(1024);
     sprintf(context, "GET %s%s HTTP/1.1\r\n%s\r\n", Z_STRVAL_P(url), query, header);
-    printf("%s\n", context);
-    char *response;
-    if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, response)){
-
+    //printf("%s\n", context);
+    if(query[0] != '\0'){
+        efree(query);
     }
-
+    // printf("query %p\n", query);
+    // printf("params %p\n", params);
+    // printf("url %p\n", url);
+    // printf("rv %p\n", rv);
+    char *response;
+    if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, &response) == FAILURE){
+        RETURN_FALSE;
+    }
+    efree(context);
+    //printf("2 %s %p\n", response, response);
     RETURN_STRING(response);
 }
 
@@ -546,8 +559,8 @@ PHP_METHOD(http, post)
     sprintf(context, "POST %s HTTP/1.1\r\n%sContent-Length: %d\r\n\r\n%s", url, header, strlen(data), data);
 
     char *response;
-    if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, response)){
-
+    if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, &response) == FAILURE){
+        RETURN_FALSE;
     }
 
     RETURN_STRING(response);

@@ -225,6 +225,7 @@ void http_sock_disconnect(HttpSock *http_sock)
 
 void http_free_socket(HttpSock *http_sock)
 {
+    efree(http_sock->host);
     efree(http_sock);
 }
 
@@ -313,11 +314,23 @@ zend_array * explode(char *str, char *d)
         }
     }
     efree(buf);
+    efree(next);
     //printf("++++++++++++++++++++++++++++++++++++++++++++++++++\n");
     return za;
 }
 
-char * http_parse(char *response)
+char * substr(char *str, int s, int e)
+{
+    char *ret = (char *)emalloc(sizeof(char)*(e+1));
+    int i,j = s;
+    for(i = 0; i < e; i++,j++){
+        *(ret+i) = *(str+j);
+    }
+    *(ret+i) = '\0';
+    return ret;
+}
+
+char * http_parse(INTERNAL_FUNCTION_PARAMETERS, char *response)
 {
     //printf("\n------------------------------------------------------------\n%s\n", response);
     zend_array *arr_rps = explode(response, "\r\n\r\n");
@@ -325,6 +338,7 @@ char * http_parse(char *response)
 
     zend_string *http_header = Z_STR(rps->val);
     //printf("%s\n", http_header->val);
+    zend_update_property_long(http_class_ce, getThis(), "code", strlen("code"), atoi(substr(http_header->val, 9, 3)));
 
     rps++;
     zend_string *http_data = Z_STR(rps->val);
@@ -381,7 +395,7 @@ int http_sock_connect(HttpSock *http_sock)
     if(persistent_id){
         efree(persistent_id);    
     }
-
+    
     return 1;
 }
 
@@ -406,8 +420,7 @@ int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char **response)
         zend_throw_exception(NULL, "http connect error", 0);
         return 0;
     }
-    efree(phpurl->query);
-    efree(phpurl);
+    php_url_free(phpurl);
     //zend_list_insert(http_sock, le_http_sock TSRMLS_CC);
 
     if(php_stream_write_string(http_sock->stream, context)){
@@ -448,7 +461,7 @@ int http_request(INTERNAL_FUNCTION_PARAMETERS, char *context, char **response)
         }
     }
 
-    *response = http_parse(data);
+    *response = http_parse(INTERNAL_FUNCTION_PARAM_PASSTHRU, data);
     efree(data);
     efree(buf);
     //printf("1 %s %p\n", *response, *response);
@@ -516,19 +529,11 @@ PHP_METHOD(http, get)
     //生成context
     context = (char *)emalloc(1024);
     sprintf(context, "GET %s%s HTTP/1.1\r\n%s\r\n", Z_STRVAL_P(url), query, header);
-    //printf("%s\n", context);
-    if(query[0] != '\0'){
-        efree(query);
-    }
-    // printf("query %p\n", query);
-    // printf("params %p\n", params);
-    // printf("url %p\n", url);
-    // printf("rv %p\n", rv);
+    // printf("%s\n", context);
     char *response;
     if(http_request(INTERNAL_FUNCTION_PARAM_PASSTHRU, context, &response) == FAILURE){
         RETURN_FALSE;
     }
-    efree(context);
     //printf("2 %s %p\n", response, response);
     RETURN_STRING(response);
 }
@@ -600,7 +605,7 @@ PHP_FUNCTION(confirm_http_compiled)
 
 static void http_sock_dtor(zend_resource *rsrc)
 {
-    HttpSock *http_sock = (HttpSock *)rsrc->ptr;
+    HttpSock *http_sock = (HttpSock *) rsrc->ptr;
     http_sock_disconnect(http_sock);
     http_free_socket(http_sock);
 }
@@ -643,6 +648,8 @@ PHP_MINIT_FUNCTION(http)
     zend_declare_property_string(http_class_ce, "url", strlen("url"), "", ZEND_ACC_PUBLIC);
     zend_declare_property_string(http_class_ce, "user_agent", strlen("user_agent"), "your agent", ZEND_ACC_PUBLIC);
     zend_declare_property_null(http_class_ce, "header", strlen("header"), ZEND_ACC_PUBLIC);
+
+    zend_declare_property_long(http_class_ce, "code", strlen("code"), 0, ZEND_ACC_PUBLIC);
     
     le_http_sock = zend_register_list_destructors_ex(
         http_sock_dtor,

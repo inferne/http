@@ -193,7 +193,7 @@ char * http_build_header(INTERNAL_FUNCTION_PARAMETERS)
     }
 
     array_exists(context, arr_hd, "Accept",       strlen("Accept"),       "Accept: */*\r\n");
-    array_exists(context, arr_hd, "User-Agent",   strlen("User-Agent"),   "User-Agent: Http Client\r\n");
+    array_exists(context, arr_hd, "User-Agent",   strlen("User-Agent"),   "User-Agent: A Http Client\r\n");
     array_exists(context, arr_hd, "Content-Type", strlen("Content-Type"), "Content-Type: application/x-www-form-urlencoded\r\n");
     array_exists(context, arr_hd, "Connection",   strlen("Connection"),   "Connection: Keep-Alive\r\n");
     //printf("%s\n", context);
@@ -308,12 +308,14 @@ zend_array * explode(char *str, char *d)
             j++;
             
             max_size = 1024;
-            buf = zend_string_alloc(max_size, 0);
+            if(i != str_len-1){
+                buf = zend_string_alloc(max_size, 0);
+            }
             // printf("\n");
             k = 0;//look for the next match
         }
     }
-    efree(buf);
+    //efree(buf);
     efree(next);
     //printf("++++++++++++++++++++++++++++++++++++++++++++++++++\n");
     return za;
@@ -340,6 +342,8 @@ char * http_parse(INTERNAL_FUNCTION_PARAMETERS, char *response)
     //printf("%s\n", http_header->val);
     zend_update_property_long(http_class_ce, getThis(), "code", strlen("code"), atoi(substr(http_header->val, 9, 3)));
 
+    zend_array *header = explode(http_header->val, "\r\n");
+
     rps++;
     zend_string *http_data = Z_STR(rps->val);
     //printf("%s\n", http_data->val);
@@ -352,6 +356,7 @@ char * http_parse(INTERNAL_FUNCTION_PARAMETERS, char *response)
     char *ret = (char *)emalloc(sizeof(char)*max_len);
     int ret_len = 0;
     for(; p != end; p++){
+        printf("%s\n", Z_STRVAL(p->val));
         //ret_len = strmcat(ret, ret_len, Z_STRVAL(p->val), Z_STRLEN(p->val), &max_len);
         strncat(ret, Z_STRVAL(p->val), Z_STRLEN(p->val));
     }
@@ -395,7 +400,7 @@ int http_sock_connect(HttpSock *http_sock)
     if(persistent_id){
         efree(persistent_id);    
     }
-    
+
     return 1;
 }
 
